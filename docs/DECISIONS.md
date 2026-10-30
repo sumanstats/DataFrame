@@ -125,6 +125,12 @@ Do not claim support until the Office encryption container, key derivation, veri
 - NaN must remain distinguishable from canonical NA internally.
 - Importing NaN must not automatically convert it into NA.
 
+
+- Verify is-na(NA) is True and is-nan(NA) is False.
+- Verify is-na(NaN) and is-nan(NaN) are both True.
+- Verify canonical NA observations have validity bit 0, while numeric NaN observations have validity bit 1.
+- Verify importing numeric NaN does not silently convert it into canonical NA.
+
 #### 2. Expression evaluation
 
 - Implement centralized three-valued logical semantics: True, False, and Unknown.
