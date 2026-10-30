@@ -19,12 +19,7 @@ Proposed conceptual entry points:
 - `DataFrame.from-matrix(...)` or `DataFrame.from-rows-of-arrays(...)` for a list of arrays.
 - `read-csv(...)`, `read-xlsx(...)`, `read-xls(...)`, `read-sas(...)`, etc.
 
-Examples of intended input shapes (not implementation code):
-- Column-oriented: `{ name => ['A', 'B'], age => [20, 30] }`
-- Row-oriented: `[{ name => 'A', age => 20 }, { name => 'B', age => 70 }]`
-- Array rows: `[['A', 20], ['B', 30]]` with supplied names `['name', 'age']`.
-
-Missing hash keys in row-oriented construction become `Missing`, not an ordinary string or `NaN`. I am not sure but I think `Missing` values can be represented as `NA`.  All rows must have the same schema after unioning keys; define a deterministic column-order rule, preferably first-seen order.
+Missing hash keys in row-oriented construction become `NA`, not `NaN`. Distinguish missing values from NaN, Inf, and empty strings. Provide R-like missing-value functions, but use idiomatic Raku syntax.  Use a typed column plus a validity bitmap as canonical storage model like in Apache Arrow. Provide is-na, drop-na, replace-na, na-count methods and other methods as required.
 
 ## 3. Pipeline style
 
@@ -46,12 +41,12 @@ This illustrates the intended readability only. Confirm exact Raku syntax and ca
 |---|---|---|
 | `select` | Choose and reorder columns | Unknown names should error by default |
 | `filter` | Keep matching rows | Missing/unknown predicate results are dropped by default, configurable later |
-| `filter_out` | Excludes rows based on conditions | Exclude specific rows that meet a condition |
+| `filter-out` | Excludes rows based on conditions | Exclude specific rows that meet a condition |
 | `mutate` | Add or replace columns | Existing columns are replaced only when named explicitly |
 | `rename` | Rename columns | Reject collisions unless an explicit policy is provided |
 | `arrange` | Sort rows | Document ascending/descending and missing placement |
 | `distinct` | Remove duplicate rows/keys | Specify which duplicate survives |
-| `slice` | Select rows by positions | Define indexing convention clearly with its variants `slice_head()`, `slice_tail()`, `slice_min()`, `slice_max()`, `slice_sample()` |
+| `slice` | Select rows by positions | Define indexing convention clearly with its variants `slice-head()`, `slice-tail()`, `slice-min()`, `slice-max()`, `slice-sample()` |
 | `relocate`	| Change the order of columns	| Moving columns around without changing their data |
 | `group-by` | Create grouped view/plan | Group order and missing group keys documented |
 | `summarise` | Aggregate per group | Aggregation and missing-value rules explicit |
@@ -59,7 +54,7 @@ This illustrates the intended readability only. Confirm exact Raku syntax and ca
 | `bind-cols` | Append columns | Require equal row counts unless an explicit alignment mode is requested |
 
 
-Other verbs to implement like that of dplyr are: rename_with(), transmute(), pull(), ungroup(), reframe(), rowwise(), count(), tally(), add_count(), add_tally(), bind_rows(), bind_cols()
+Other verbs to implement like that of dplyr are: rename-with(), transmute(), pull(), ungroup(), reframe(), rowwise(), count(), tally(), add-count(), add-tally(), bind-rows(), bind-cols()
 
 ## 5. Joins
 
@@ -74,12 +69,14 @@ Provide:
 Conceptual usage:
 
 ```text
-people.left-join(visits, on => 'person_id')
+people.left-join(visits, by => 'person_id')
 ```
 
-For different key names, support a clear mapping form, for example `on => { person_id => patient_id }`, if Raku syntax and ergonomics test well. Also allow multiple keys. Do not silently join every same-named column by default; explicit keys are safer and easier to review.
+For different key names, support a clear mapping form, for example `by => { person_id => patient_id }`, if Raku syntax and ergonomics test well. Also allow multiple keys. Do not silently join every same-named column by default; explicit keys are safer and easier to review.
 
 Define duplicate-key expansion, output column suffixes, missing-key equality, and output order before implementation.
+
+Try to match similar to dplyr joins.
 
 ## 6. Row context vs column context
 
@@ -89,7 +86,7 @@ Do not promise that every operation is vectorized in the first release. Document
 
 ## 7. Missing values
 
-Expose a visible, documented `Missing` value and predicates such as `is-missing`. Do not overload `Nil`, `NaN`, empty string, and missing into one meaning. Reader-specific sentinels must be normalized at import boundaries.
+See DECISIONS.md.
 
 ## 8. Type conversion
 

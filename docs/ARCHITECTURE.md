@@ -19,7 +19,7 @@ Data flows through a canonical internal model. Format adapters may preserve sour
 Recommended first implementation: an ordered collection of named columns with a common row count. Each column has:
 - A name.
 - A logical type.
-- A typed or initially generic storage vector.
+- A typed vector.
 - Missing-value information.
 - Optional metadata (labels, source type, format, timezone, etc.).
 
@@ -58,7 +58,7 @@ Operations must preserve row order unless their purpose is to reorder rows. `sel
 ## 6. Join engine
 
 Implement joins against canonical column values and a shared key-comparison policy. Support one or multiple key columns. Specify:
-- `on` as one name, multiple names, or a left/right key mapping.
+- `by` as one name, multiple names, or a left/right key mapping.
 - Suffixes for duplicate non-key column names.
 - Duplicate key handling (many-to-many expansion is possible and must be documented).
 - Missing-key matching policy.

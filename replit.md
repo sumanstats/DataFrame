@@ -53,3 +53,19 @@ The intended development target includes Windows, Linux and MacOS. The developme
 ## Definition of done
 
 A change is done only when the relevant acceptance criteria pass, errors are handled, documentation matches behavior, and the implementation does not violate the architecture in `docs/ARCHITECTURE.md`.
+
+
+I have accepted the DataFrame construction API and architecture documented in `docs/DECISIONS.md`.
+
+Please read the complete decision, including all examples, validation rules, architecture requirements, performance considerations, and acceptance criteria.
+
+Do not start implementing yet.
+
+First:
+1. Summarize the accepted design in your own words.
+2. Explain how the existing project structure and code relate to this design.
+3. Identify any technical conflicts, ambiguities, or decisions that still need clarification.
+4. Propose a step-by-step implementation plan beginning with the canonical column representation and shared DataFrameBuilder.
+5. Identify the tests needed for the first implementation phase.
+
+Do not change accepted decisions or begin coding until I explicitly authorize the implementation.
