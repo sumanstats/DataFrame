@@ -85,8 +85,8 @@ All readers must convert source-specific missing representations into the canoni
 
 Some samples for implementation:
 
-- `read-csv("data.csv",:missing-values<NA N/A>,:empty-as-na(False));`
-- `write-csv($df1, "output.csv", :na("NA"));`
+- `read-csv("data.csv",:na-values<NA N/A>,:empty-as-na(False));`
+- `write-csv($df, "output.csv", :na("NA"));`
 - `$df1.left-join($df2,:by<patient_id>,:na-matches<na>);`
 - `read-csv("data.csv", :empty-as-na(True));`
 
@@ -239,7 +239,7 @@ Implement these in first prototype phase, not leave them until the full DataFram
 - Verify Unknown is not silently coerced in Raku Boolean context.
 - Verify callable syntax and expression-engine syntax return equivalent results.
 - Verify [NA, NA] without a schema has UnresolvedType, not logical Unknown.
-- Verify is-na(NaN) and is-missing(NaN) differ.
+- Verify is-na(NaN) and is-nan(NaN) are true, while NaN remains distinct from bitmap-marked NA in storage.
 - Verify drop-na, complete-cases, na-count, and replace-na all treat NaN consistently by default.
 - Verify their explicit NaN-exclusion option works.
 
@@ -681,11 +681,17 @@ Each column shall maintain:
 - Its values.
 - Its missing-value validity information.
 
-A validity bitmap or equivalent compact validity representation is recommended for missing observations.
+Each column MUST represent missingness using an Apache Arrow-style, bit-packed validity bitmap: one bit per observation, where 1 means valid and 0 means missing. A Boolean array or a list of missing-value sentinels is not an acceptable substitute.
+
+Bits MUST use least-significant-bit-first ordering within each byte. For a column without missing observations, the bitmap MAY be omitted; an absent bitmap means every observation is valid.
+
+The bitmap is authoritative for missingness. Values stored at invalid positions MUST NOT be interpreted as observations or exposed through the public API; reading such positions returns canonical NA.
+
+Numeric NaN remains a valid numeric observation with validity bit 1, even though is-na(NaN) returns true.
 
 The public `NA` value MUST remain logically separate from the physical storage representation of missingness.
 
-The initial implementation may use a simpler Raku-native storage implementation. However, the abstraction should permit future optimized typed buffers and native storage backends without redesigning the public API.
+The initial implementation MAY use Raku-native typed value storage, but MUST implement the packed validity bitmap from the first construction milestone. Future storage optimizations MUST preserve these semantics. Full Apache Arrow memory-layout, buffer-alignment, interchange, and zero-copy compatibility are not required.
 
 The design may take inspiration from Apache Arrow's columnar memory model, but full Arrow format compatibility is not required.
 
@@ -996,3 +1002,332 @@ This decision is considered implemented only when:
 - Documentation describes actual behavior rather than merely planned behavior.
 
 A feature is not complete merely because its code has been written. Its tests must pass and its acceptance criteria must be satisfied.
+
+
+# Decision: Strict, Predictable DataFrame Construction and Conversion
+
+**Status:** Proposed  
+**Decision area:** Type inference, schema validation, column names and ordering, ownership, and public naming  
+**Applies to:** All constructors, the shared construction pipeline, and future file readers
+
+## 1. Design principle
+
+The library combines pandas-style discoverability and convenience with tibble-style strictness and composable dplyr-style operations.
+
+Compatibility means familiar concepts, not identical behavior.
+
+Defaults MUST preserve values, types, names, ordering, and ownership predictably. Ambiguous or lossy behavior requires an explicit option.
+
+All constructors and readers MUST follow one documented semantic contract through the accepted shared construction pipeline.
+
+The library MUST NOT introduce separate “pandas mode” and “R mode” implementations of core behavior.
+
+## 2. Initial logical types
+
+The initial construction milestone shall support:
+
+- Boolean.
+- Integer.
+- Floating-point.
+- String.
+- `UnresolvedType` for columns with no observations from which a type can be inferred.
+
+Canonical `NA` is a missing observation, not an ordinary column value type.
+
+Logical `Unknown`, used by the expression engine, is distinct from `UnresolvedType`.
+
+Date, datetime, duration, categorical, decimal, complex, nested, and heterogeneous object columns require separately documented milestones. Unsupported values MUST produce clear errors rather than silent stringification or coercion.
+
+Raku types exposed in schema examples, such as `Bool`, `Int`, `Num`, and `Str`, MUST have documented mappings to the library’s logical types.
+
+The logical type contract MUST remain separate from the physical storage implementation. Integer ranges and floating-point precision MUST be documented and enforced for the selected storage.
+
+This decision does not establish full Apache Arrow compatibility or change separately accepted storage requirements.
+
+## 3. Type inference
+
+### 3.1 General rules
+
+Type inference MUST:
+
+1. Operate independently for each column.
+2. Exclude canonical `NA` observations from type inference.
+3. Treat numeric `NaN` as a floating-point observation, not as bitmap-marked missingness.
+4. Produce deterministic results independent of observation order.
+5. Preserve existing values without silent precision loss.
+6. Use the same rules across constructors and normalized reader input.
+
+The first implementation MUST NOT infer a type from only an initial sample and then silently discard incompatible later values.
+
+### 3.2 Default inference outcomes
+
+| Observations | Result |
+|---|---|
+| Boolean values, optionally with `NA` | Boolean |
+| Integer values, optionally with `NA` | Integer |
+| Floating-point values, optionally with `NA`, NaN, or infinities | Floating-point |
+| String values, optionally with `NA` | String |
+| Integer and floating-point values | Floating-point only if every integer is exactly representable in the selected floating-point type; otherwise error |
+| Boolean and numeric values | Error |
+| String and numeric values | Error |
+| Only `NA`, without a schema | `UnresolvedType` |
+| Empty column, without a schema | `UnresolvedType` |
+| Only `NA`, or an empty column, with a schema | Declared type |
+
+Integer overflow MUST produce an error rather than wraparound.
+
+Values such as Raku `Rat`, `FatRat`, and `Complex` MUST NOT be silently converted to floating point. Until supported by a documented mapping, they require explicit conversion before construction.
+
+### 3.3 Strings remain strings
+
+Direct constructors MUST NOT automatically interpret strings as numbers, Boolean values, dates, or missing-value tokens.
+
+For example:
+
+- `"001"` remains a string with leading zeros.
+- `"NA"` remains a string.
+- `"NaN"` remains a string.
+- `""` remains an empty string.
+
+File readers MAY offer textual parsing and missing-token recognition. Those options belong to the reader layer and MUST normalize results before passing them to the shared builder.
+
+### 3.4 Unresolved columns
+
+An all-missing or empty column without a declared type MUST use `UnresolvedType`.
+
+When a later operation combines an unresolved column with a compatible typed column, the known type MAY resolve the result, following that operation’s documented rules.
+
+Unresolved columns MUST NOT be arbitrarily assigned an integer, floating-point, or string type.
+
+## 4. Explicit schemas
+
+An explicit schema takes precedence over inference.
+
+Schemas MAY be partial: declared columns are validated against their declared types; undeclared columns are inferred normally.
+
+A schema entry naming a column outside the constructor’s output columns MUST raise an error.
+
+Schema application MUST:
+
+- Accept values already compatible with the declared type.
+- Permit only documented, value-preserving conversions by default.
+- Preserve missingness without changing the declared type.
+- Reject overflow, incompatible values, and precision loss.
+- Identify the affected column and, where applicable, observation position.
+
+Declaring a schema MUST NOT silently:
+
+- Parse strings into numbers.
+- Convert numbers into strings.
+- Convert Boolean values into integers.
+- Round or truncate fractional values.
+- Replace invalid values with `NA`.
+
+Parsing, rounding, truncation, and other potentially lossy conversions require explicit conversion operations or separately documented reader options.
+
+## 5. Column ordering and selection
+
+### 5.1 Column-oriented construction
+
+For:
+
+```raku
+DataFrame.new(
+    columns => ...,
+    column-order => ...,
+)
+```
+
+`column-order` MUST be a complete permutation of the input column names.
+
+The constructor MUST reject:
+
+- Omitted input names.
+- Unknown names.
+- Repeated names.
+
+`column-order` changes ordering only. It MUST NOT implicitly select or discard columns.
+
+Without explicit ordering, ordinary Hash inputs use deterministic alphabetical ordering. The implementation MUST document a case-sensitive, locale-independent comparison rule.
+
+### 5.2 Record-oriented construction
+
+For `DataFrame.from-rows`, the `columns` option explicitly selects and orders output columns.
+
+- Unselected record keys are intentionally excluded.
+- Selected keys missing from a record become `NA`.
+- A selected name absent from every record produces an all-missing column.
+- Repeated selected names are errors.
+
+Without an explicit list, output columns are the alphabetical union of record keys.
+
+Any strict-record-validation option MUST define whether it validates the original record key sets or the selected output schema.
+
+### 5.3 Positional construction
+
+For positional row and matrix constructors, `columns` names the input positions.
+
+- Names MUST be supplied in the initial API.
+- The number of names MUST match the input width.
+- Supplied order MUST be preserved.
+- Malformed row widths MUST raise errors.
+
+### 5.4 Ordered input forms
+
+If ordered pairs or other ordered column inputs are supported later, their supplied order MUST be preserved unless explicit reordering is requested.
+
+The implementation MUST NOT infer meaningful insertion order from an ordinary Raku Hash.
+
+## 6. Column names
+
+Column names MUST be non-empty strings.
+
+Names containing spaces, punctuation, or Unicode are permitted.
+
+Names are compared exactly and case-sensitively. The library MUST NOT silently trim, normalize, case-fold, or otherwise alter them.
+
+Duplicate names MUST be rejected by default.
+
+Automatic name repair MAY be added later as an explicit option. It MUST NOT become the default.
+
+Duplicate detection applies wherever the original names remain available, including:
+
+- Explicit name and ordering lists.
+- Positional constructor names.
+- Supported ordered column inputs.
+- File headers before conversion into a Hash.
+
+A Raku Hash may already have overwritten duplicate keys before reaching the constructor. The library MUST document that it cannot detect or recover those overwritten entries.
+
+## 7. Input ownership and copying
+
+The default observable guarantee is:
+
+> Mutating constructor inputs after construction MUST NOT change the DataFrame, and DataFrame operations MUST NOT unexpectedly mutate constructor inputs.
+
+The initial implementation SHOULD establish independent owned storage for supported mutable inputs.
+
+Copying only an outer collection is insufficient when mutable elements remain shared. Unsupported nested mutable values MUST be rejected until their ownership and copying semantics are defined.
+
+Future immutable sharing or copy-on-write implementations MAY avoid physical copies while preserving the same observable guarantee.
+
+Zero-copy construction:
+
+- MUST NOT be promised for arbitrary Raku Arrays, Lists, or Sequences.
+- Requires compatible storage and explicit ownership and lifetime rules.
+- MUST NOT silently introduce mutable aliasing into the default constructor path.
+- Requires a separately documented advanced API or option.
+
+## 8. Shared construction behavior
+
+Every constructor and reader MUST use the same:
+
+- Type-inference and promotion rules.
+- Schema validation.
+- Column-name validation.
+- Missing-value normalization.
+- Ownership guarantees.
+- Canonical column representation.
+
+Input adapters interpret input shape or format. They MUST NOT create independent storage engines or alternative type systems.
+
+Column-oriented inputs MUST NOT be converted to rows and then transposed back merely to reuse another constructor.
+
+## 9. Public naming conventions
+
+Public identifiers use idiomatic Raku hyphenated names.
+
+Canonical option names are:
+
+| Purpose | Name |
+|---|---|
+| Explicit join keys | `by` |
+| Textual missing-value tokens during import | `na-values` |
+| Exported missing-value token | `na` |
+| Column-oriented constructor input | `columns` |
+| Explicit type declarations | `schema` |
+| Reordering all columns in `DataFrame.new` | `column-order` |
+
+`missing-values` MUST NOT be introduced as a competing canonical spelling for `na-values`.
+
+The accepted family-level statistical readers are:
+
+- `read-sas`
+- `read-stata`
+- `read-spss`
+
+Format-specific readers MAY be added as documented wrappers. They MUST reuse the same adapters and construction pipeline, and MUST NOT imply support for unimplemented variants.
+
+## 10. Validation and errors
+
+Invalid input MUST produce structured, actionable errors.
+
+Where applicable, errors identify:
+
+- The constructor or operation.
+- The column name.
+- The observation or row position.
+- The expected type or shape.
+- The actual incompatible type or shape.
+
+Errors MUST NOT silently repair data or expose entire datasets unnecessarily.
+
+The implementation MUST document its row-position indexing convention.
+
+## 11. First-phase acceptance tests
+
+The first construction phase MUST verify:
+
+### Type inference and schemas
+
+- Every supported initial type.
+- Mixed columns within one DataFrame.
+- Order-independent inference.
+- Lossless integer-to-floating promotion.
+- Rejection of precision loss and overflow.
+- Rejection of Boolean/numeric and string/numeric mixtures.
+- Preservation of leading-zero strings.
+- Partial schemas and unknown schema names.
+- Empty and all-NA columns, with and without schemas.
+
+### Names and ordering
+
+- Alphabetical Hash ordering.
+- Complete explicit permutations.
+- Rejection of omitted, unknown, and repeated ordering names.
+- Rejection of duplicate and empty names.
+- Preservation of valid spaces, punctuation, Unicode, and case.
+
+### Missingness and ownership
+
+- Distinction between canonical `NA`, numeric `NaN`, infinities, and empty strings.
+- Missing observations preserve declared types.
+- Constructor inputs remain unchanged.
+- Later mutations of input arrays do not alter constructed data.
+
+### Shape and architecture
+
+- Empty DataFrames and zero-row columns.
+- Rejection of unequal lengths without truncation or padding.
+- Shared builder behavior.
+- Cross-constructor equivalence as additional constructors are implemented, using explicitly aligned column order.
+
+Previously specified logical and missing-helper prototype tests remain required. This decision does not remove or defer them.
+
+## 12. Implementation boundary
+
+This decision defines the semantic contract; it does not authorize implementation.
+
+The first authorized construction milestone should establish:
+
+1. Canonical columns and validity storage.
+2. Missing-value and initial type semantics.
+3. `ColumnBuilder`.
+4. Shared `DataFrameBuilder`.
+5. `DataFrame.new(columns => …)`.
+6. Required unit and prototype tests.
+
+Additional constructors, file readers, joins, streaming, and advanced ownership options remain separate milestones.
+
+Accepted behavior MUST NOT be changed silently. Any necessary departure requires an explanation of the conflict, proposed alternative, and consequences, followed by project-owner approval.
+

@@ -20,7 +20,7 @@ Recommended first implementation: an ordered collection of named columns with a 
 - A name.
 - A logical type.
 - A typed vector.
-- Missing-value information.
+- An Apache Arrow-style packed validity bitmap, as specified in `DECISIONS.md`.
 - Optional metadata (labels, source type, format, timezone, etc.).
 
 Do not prematurely implement a sophisticated packed columnar engine. Start with simple, correct Raku storage behind a stable Column interface, then optimize measured bottlenecks. Keep the public API independent of the storage implementation.
